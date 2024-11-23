@@ -1,0 +1,27 @@
+# Python
+*.pyc
+*.pyo
+__pycache__/
+
+# Virtual environment
+venv/
+.venv/
+
+# Логи
+*.log
+
+# IDEs и редакторы
+.idea/
+.vscode/
+
+# Статические файлы и другие ресурсы
+css/
+images/
+js/
+
+# Файлы манифеста и сервис-воркера (если не нужны в репозитории)
+manifest.json
+service-worker.js
+
+# Другие временные и специфические файлы
+node_modules/
