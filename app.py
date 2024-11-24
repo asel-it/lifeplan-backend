@@ -18,7 +18,7 @@ db_config = {
 }
 
 # Hugging Face Model
-MODEL_ID = "https://huggingface.co/facebook/nllb-200-3.3B"
+MODEL_ID = "facebook/nllb-200-3.3B"
 
 # Load the model and tokenizer
 def load_model():
