@@ -153,6 +153,7 @@ def serve_static(filename):
 if __name__ == '__main__':
     try:
         init_db()
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+        port = int(os.environ.get("PORT", 5000))  # Получаем порт из переменной окружения или используем 5000 по умолчанию
+        app.run(host="0.0.0.0", port=port)  # Обязательно используйте 0.0.0.0 для того, чтобы сервис был доступен на всех интерфейсах
     except Exception as e:
         print(f"App launch error: {e}")
