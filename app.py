@@ -9,6 +9,10 @@ import os
 app = Flask(__name__)
 CORS(app)
 
+port = int(os.environ.get("PORT", 10000))  # Преобразование значения в целое число
+app.run(host="0.0.0.0", port=port)
+
+
 # Database configuration (use environment variables for Heroku)
 db_config = {
     'host': os.environ.get('DB_HOST'),
@@ -151,9 +155,4 @@ def serve_static(filename):
     return send_from_directory('.', filename)
 
 if __name__ == '__main__':
-    try:
-        init_db()
-        port = int(os.environ.get("PORT", 4000))  # Получаем порт из переменной окружения или используем 5000 по умолчанию
-        app.run(host="0.0.0.0", port=port)  # Обязательно используйте 0.0.0.0 для того, чтобы сервис был доступен на всех интерфейсах
-    except Exception as e:
-        print(f"App launch error: {e}")
+    app.run(host="0.0.0.0", port=port)
