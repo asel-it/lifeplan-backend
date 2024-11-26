@@ -7,14 +7,16 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import os
 
 app = Flask(__name__)
-CORS(app)
 
-# Database configuration (use environment variables for Heroku)
+# Разрешение CORS для фронтенда
+CORS(app, resources={r"/*": {"origins": "https://asel-it.github.io"}})
+
+# Database configuration
 db_config = {
-    'host': os.environ.get('DB_HOST'),
-    'user': os.environ.get('DB_USER'),
-    'password': os.environ.get('DB_PASSWORD'),
-    'database': os.environ.get('DB_NAME')
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'database': os.environ.get('DB_NAME', 'lifeplan')
 }
 
 # Hugging Face Model
@@ -140,12 +142,11 @@ def generate_text():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Serve index.html
+# Serve static files
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
 
-# Serve static files
 @app.route('/<path:filename>')
 def serve_static(filename):
     return send_from_directory('.', filename)
@@ -155,6 +156,5 @@ init_db()
 
 # Start the Flask app
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))  # Преобразование значения в целое число
+    port = int(os.environ.get("PORT", 10000))  # Default to 10000
     app.run(host="0.0.0.0", port=port)
-
