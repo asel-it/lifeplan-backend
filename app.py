@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModel
 import torch
 import mysql.connector
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -9,7 +9,7 @@ import os
 app = Flask(__name__)
 
 # Разрешение CORS для фронтенда
-CORS(app, resources={r"/*": {"origins": "https://asel-it.github.io"}})
+CORS(app, resources={r"/*": {"origins": "https://asel-it.github.io/lifeplan/"}})
 
 # Database configuration
 db_config = {
@@ -19,36 +19,38 @@ db_config = {
     'database': os.environ.get('DB_NAME', 'lifeplan')
 }
 
-# Hugging Face Model
-MODEL_ID = "facebook/nllb-200-3.3B"
+# Модель THUDM/chatglm-6b
+MODEL_NAME = "THUDM/chatglm-6b"
 
-# Load the model and tokenizer
+# Загрузка модели и токенизатора
 def load_model():
     try:
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_ID, torch_dtype=torch.float32)
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+        model = AutoModel.from_pretrained(MODEL_NAME, trust_remote_code=True).half().cuda()
         model.eval()
         return model, tokenizer
     except Exception as e:
-        print(f"Error loading model: {e}")
+        print(f"Ошибка загрузки модели: {e}")
         raise
 
-# Initialize model
+
+# Инициализация модели
 try:
     model, tokenizer = load_model()
 except Exception as e:
-    print(f"Failed to initialize model: {e}")
+    print(f"Не удалось инициализировать модель: {e}")
     exit(1)
 
-# Connect to MySQL
+# Подключение к базе данных
 def get_db():
     try:
-        return mysql.connector.connect(**db_config)
+        conn = mysql.connector.connect(**db_config)
+        return conn
     except mysql.connector.Error as err:
-        print(f"Database connection error: {err}")
+        print(f"Ошибка подключения к базе данных: {err}")
         raise
 
-# Initialize database
+# Инициализация базы данных
 def init_db():
     try:
         conn = get_db()
@@ -56,18 +58,19 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                username VARCHAR(255) UNIQUE,
-                password VARCHAR(255)
+                username VARCHAR(255) UNIQUE NOT NULL,
+                password VARCHAR(255) NOT NULL
             )
         ''')
         conn.commit()
         cursor.close()
         conn.close()
+        print("Инициализация базы данных завершена.")
     except Exception as e:
-        print(f"Database initialization error: {e}")
+        print(f"Ошибка инициализации базы данных: {e}")
         raise
 
-# Register user
+# Регистрация пользователя
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -75,7 +78,7 @@ def register():
     password = data.get('password')
 
     if not username or not password:
-        return jsonify({'error': 'Username and password are required'}), 400
+        return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
 
     hashed_password = generate_password_hash(password, method='sha256')
 
@@ -84,16 +87,16 @@ def register():
         cursor = conn.cursor()
         cursor.execute('INSERT INTO users (username, password) VALUES (%s, %s)', (username, hashed_password))
         conn.commit()
-        return jsonify({'message': 'User registered successfully'}), 201
+        return jsonify({'message': 'Пользователь успешно зарегистрирован'}), 201
     except mysql.connector.Error as err:
-        if err.errno == 1062:
-            return jsonify({'error': 'Username already exists'}), 400
+        if err.errno == 1062:  # Ошибка уникального ограничения
+            return jsonify({'error': 'Имя пользователя уже существует'}), 400
         return jsonify({'error': str(err)}), 500
     finally:
         cursor.close()
         conn.close()
 
-# Login user
+# Авторизация пользователя
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -101,48 +104,41 @@ def login():
     password = data.get('password')
 
     if not username or not password:
-        return jsonify({'error': 'Username and password are required'}), 400
+        return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
 
     try:
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE username = %s', (username,))
+        cursor.execute('SELECT id, username, password FROM users WHERE username = %s', (username,))
         user = cursor.fetchone()
 
         if user and check_password_hash(user[2], password):
-            return jsonify({'message': 'Login successful'}), 200
+            return jsonify({'message': 'Успешный вход'}), 200
         else:
-            return jsonify({'error': 'Invalid credentials'}), 401
+            return jsonify({'error': 'Неверные учетные данные'}), 401
     finally:
         cursor.close()
         conn.close()
 
-# Generate text (translation in this case)
+# Генерация текста
 @app.route('/generate', methods=['POST'])
 def generate_text():
     data = request.get_json()
     prompt = data.get('prompt', '')
 
     if not prompt:
-        return jsonify({'error': 'Prompt is required'}), 400
+        return jsonify({'error': 'Требуется запрос'}), 400
 
     try:
         with torch.no_grad():
-            input_ids = tokenizer.encode(prompt, return_tensors='pt')
-            output = model.generate(
-                input_ids,
-                max_length=150,
-                num_return_sequences=1,
-                temperature=0.7,
-                top_k=50,
-                top_p=0.95
-            )
-            generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+            inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+            outputs = model.generate(inputs["input_ids"], max_length=150, temperature=0.7)
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
         return jsonify({'response': generated_text}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f"Ошибка генерации текста: {e}"}), 500
 
-# Serve static files
+# Отдача статических файлов
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
@@ -151,10 +147,10 @@ def index():
 def serve_static(filename):
     return send_from_directory('.', filename)
 
-# Initialize database if needed
+# Инициализация базы данных при необходимости
 init_db()
 
-# Start the Flask app
+# Запуск Flask-приложения
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))  # Default to 10000
+    port = int(os.environ.get("PORT", 10000))  # По умолчанию порт 10000
     app.run(host="0.0.0.0", port=port)
