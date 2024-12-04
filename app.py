@@ -1,186 +1,95 @@
-from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForMaskedLM
+from flask import Flask, render_template, redirect, url_for, request, jsonify, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from transformers import XLMRobertaTokenizer, XLMRobertaForSequenceClassification
 import torch
-import mysql.connector
-from werkzeug.security import generate_password_hash, check_password_hash
 import os
 
+app = Flask(__name__, static_folder="LifePlan_frontend/static", template_folder="LifePlan_frontend/templates")
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.config['SECRET_KEY'] = 'your_secret_key'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+
+# Создаем подключение к базе данных
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+# Инициализация модели ИИ
+model_name = 'xlm-roberta-base'
+tokenizer = XLMRobertaTokenizer.from_pretrained(model_name)  # Используем XLMRobertaTokenizer
+model = XLMRobertaForSequenceClassification.from_pretrained(model_name)  # Используем XLMRobertaForSequenceClassification
 
 
+# Модели базы данных
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), unique=True, nullable=False)
+    password = db.Column(db.String(150), nullable=False)
 
-app = Flask(__name__)
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
-
-# Разрешение CORS для фронтенда
-CORS(app, resources={r"/*": {"origins": "https://asel-it.github.io/lifeplan/"}})
-
-
-# Конфигурация базы данных
-db_config = {
-    'host': os.environ.get('DB_HOST', 'localhost'),
-    'user': os.environ.get('DB_USER', 'lifeplan_user'),
-    'password': os.environ.get('DB_PASSWORD', 'lp_data'),
-    'database': os.environ.get('DB_NAME', 'lp_db')
-}
-
-
-# Путь к модели
-MODEL_PATH = "C:/Users/Public/work/LifePlan_backend/xlm-roberta-base"
-
-
-# Загрузка токенизатора и модели с локального пути (передаем путь к папке, а не к файлу)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
-model = AutoModelForMaskedLM.from_pretrained(MODEL_PATH, local_files_only=True)
-
-
-# Подготовка входных данных
-text = "Replace me by any text you'd like."
-encoded_input = tokenizer(text, return_tensors='pt')
-
-
-# Прогон модели
-output = model(**encoded_input)
-
-
-# Вывод результатов
-print(output)
-
-
-
-
-
-
-# Подключение к базе данных
-def get_db():
-    try:
-        conn = mysql.connector.connect(**db_config)
-        return conn
-    except mysql.connector.Error as err:
-        print(f"Ошибка подключения к базе данных: {err}")
-        raise
-
-
-# Инициализация базы данных
-def init_db():
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                username VARCHAR(255) UNIQUE NOT NULL,
-                password VARCHAR(255) NOT NULL
-            )
-        ''')
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print("Инициализация базы данных завершена.")
-    except Exception as e:
-        print(f"Ошибка инициализации базы данных: {e}")
-        raise
-
-
-# Регистрация пользователя
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-
-
-    if not username or not password:
-        return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
-
-
-    hashed_password = generate_password_hash(password, method='sha256')
-
-
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO users (username, password) VALUES (%s, %s)', (username, hashed_password))
-        conn.commit()
-        return jsonify({'message': 'Пользователь успешно зарегистрирован'}), 201
-    except mysql.connector.Error as err:
-        if err.errno == 1062:  # Ошибка уникального ограничения
-            return jsonify({'error': 'Имя пользователя уже существует'}), 400
-        return jsonify({'error': str(err)}), 500
-    finally:
-        cursor.close()
-        conn.close()
-
-
-# Авторизация пользователя
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-
-
-    if not username or not password:
-        return jsonify({'error': 'Имя пользователя и пароль обязательны'}), 400
-
-
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, username, password FROM users WHERE username = %s', (username,))
-        user = cursor.fetchone()
-
-
-        if user and check_password_hash(user[2], password):
-            return jsonify({'message': 'Успешный вход'}), 200
-        else:
-            return jsonify({'error': 'Неверные учетные данные'}), 401
-    finally:
-        cursor.close()
-        conn.close()
-
-
-# Генерация текста
-@app.route('/generate', methods=['POST'])
-def generate_text():
-    data = request.get_json()
-    prompt = data.get('prompt', '')
-
-
-    if not prompt:
-        return jsonify({'error': 'Требуется запрос'}), 400
-
-
-    try:
-        with torch.no_grad():
-            inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
-            outputs = model(**inputs)
-            generated_text = tokenizer.decode(outputs.logits.argmax(dim=-1)[0], skip_special_tokens=True)
-        return jsonify({'response': generated_text}), 200
-    except Exception as e:
-        return jsonify({'error': f"Ошибка генерации текста: {e}"}), 500
-
-
-# Отдача статических файлов
+# Главная страница (Дашборд)
 @app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
+@login_required
+def dashboard():
+    return render_template('dashboard.html', user=current_user)
 
+# Страница регистрации
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        new_user = User(username=username, password=password)
+        db.session.add(new_user)
+        db.session.commit()
+        login_user(new_user)
+        return redirect(url_for('dashboard'))
+    return render_template('register.html')
 
-@app.route('/<path:filename>')
-def serve_static(filename):
-    return send_from_directory('.', filename)
+# Страница авторизации
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        user = User.query.filter_by(username=username).first()
+        if user and user.password == password:
+            login_user(user)
+            return redirect(url_for('dashboard'))
+    return render_template('login.html')
 
+# Страница выхода
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
 
-# Инициализация базы данных при необходимости
-init_db()
+# Запрос к модели ИИ
+@app.route('/predict', methods=['POST'])
+@login_required
+def predict():
+    text = request.json.get('text')
+    inputs = tokenizer(text, return_tensors='pt')
+    outputs = model(**inputs)
+    logits = outputs.logits
+    prediction = torch.argmax(logits, dim=-1).item()
+    return jsonify({'prediction': prediction})
 
+# Для доступа к статическим файлам фронтенда
+@app.route('/<path:path>')
+def send_static(path):
+    return send_from_directory(app.static_folder, path)
 
-# Запуск Flask-приложения
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))  # По умолчанию порт 10000
-    app.run(host="0.0.0.0", port=port)
+    # Создание всех необходимых таблиц при запуске
+    with app.app_context():  # Окружение в контексте приложения
+        if not os.path.exists('users.db'):
+            db.create_all()
 
-
-
-
+    # Запуск приложения с SSL (если нужно)
+    app.run(ssl_context=('mkcert+1.pem', 'mkcert+1-key.pem'), debug=True, host="0.0.0.0", port=5000)
